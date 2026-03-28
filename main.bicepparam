@@ -1,6 +1,7 @@
 using './main.bicep'
 
 param deployOwnerRoleAssignments = true
+param gitHubApplicationPrivateKey = '<PLACEHOLDER>'
 param lockKind = 'CanNotDelete'
 param resources = {
   accessManagement: {
@@ -221,6 +222,9 @@ param resources = {
     organizationName: 'byteterrace'
     projectName: 'Koholint'
   }
+  diskEncryptionSet: {
+    name: 'bytrcdesp000'
+  }
   dns: {
     secondLevelDomainName: 'byteterrace'
     topLevelDomainName: 'com'
@@ -249,6 +253,9 @@ param resources = {
   }
   keyVault: {
     name: 'bytrckvp000'
+  }
+  kubernetesService: {
+    name: 'bytrcaksp000'
   }
   logAnalyticsWorkspace: {
     name: 'bytrclogp000'
@@ -297,11 +304,17 @@ param resources = {
   userAssignedIdentityCustomerManagedEncryption: {
     name: 'bytrcidp001'
   }
+  userAssignedIdentityFrontDoor: {
+    name: 'bytrcidp003'
+  }
   userAssignedIdentityFunctionApplication: {
     name: 'bytrcidp002'
   }
-  userAssignedIdentityFrontDoor: {
-    name: 'bytrcidp003'
+  userAssignedIdentityKubernetesControlPlane: {
+    name: 'bytrcidp004'
+  }
+  userAssignedIdentityKubernetesKubelet: {
+    name: 'bytrcidp005'
   }
   virtualNetwork: {
     addressPrefixes: ['10.64.0.0/20']
@@ -340,6 +353,22 @@ param resources = {
         defaultOutboundAccess: false
         delegation: 'GitHub.Network/networkSettings'
         name: 'bytrcsnetp004'
+        privateEndpointNetworkPolicies: 'Disabled'
+        privateLinkServiceNetworkPolicies: 'Disabled'
+      }
+      kubernetesMachinePool: {
+        addressPrefixes: ['10.64.2.0/28']
+        defaultOutboundAccess: false
+        name: 'bytrcsnetp006'
+        natGatewayResourceId: 'bytrcngp000'
+        privateEndpointNetworkPolicies: 'Disabled'
+        privateLinkServiceNetworkPolicies: 'Disabled'
+      }
+      kubernetesServiceApi: {
+        addressPrefixes: ['10.64.2.32/26']
+        defaultOutboundAccess: false
+        delegation: 'Microsoft.ContainerService/managedClusters'
+        name: 'bytrcsnetp005'
         privateEndpointNetworkPolicies: 'Disabled'
         privateLinkServiceNetworkPolicies: 'Disabled'
       }

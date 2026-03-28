@@ -93,6 +93,10 @@ type resourceType = {
     organizationName: string
     projectName: string
   }
+  diskEncryptionSet: {
+    name: string
+    tags: tagsType?
+  }
   dns: {
     secondLevelDomainName: string
     topLevelDomainName: string
@@ -127,6 +131,10 @@ type resourceType = {
     }
   }
   keyVault: {
+    name: string
+    tags: tagsType?
+  }
+  kubernetesService: {
     name: string
     tags: tagsType?
   }
@@ -239,11 +247,19 @@ type resourceType = {
     name: string
     tags: tagsType?
   }
+  userAssignedIdentityFrontDoor: {
+    name: string
+    tags: tagsType?
+  }
   userAssignedIdentityFunctionApplication: {
     name: string
     tags: tagsType?
   }
-  userAssignedIdentityFrontDoor: {
+  userAssignedIdentityKubernetesControlPlane: {
+    name: string
+    tags: tagsType?
+  }
+  userAssignedIdentityKubernetesKubelet: {
     name: string
     tags: tagsType?
   }
@@ -257,6 +273,8 @@ type resourceType = {
       devOpsAgentPool: subnetType
       flexConsumptionApplicationServicePlan: subnetType
       gitHubNetwork: subnetType
+      kubernetesMachinePool: subnetType
+      kubernetesServiceApi: subnetType
       privateEndpoints: subnetType
     }
     tags: tagsType?
@@ -280,6 +298,8 @@ type tagsType = { *: string }
 param deployOwnerRoleAssignments bool = true
 param enableTelemetry bool = false
 param forcePrivateNetworking bool = true
+@secure()
+param gitHubApplicationPrivateKey string
 param location string = resourceGroup().location
 param lockKind ('CanNotDelete' | 'None' | 'ReadOnly') = 'CanNotDelete'
 param resources resourceType
@@ -322,6 +342,8 @@ var subnetResourceIdMap {
   devOpsAgentPool: string
   flexConsumptionApplicationServicePlan: string
   gitHubNetwork: string
+  kubernetesMachinePool: string
+  kubernetesServiceApi: string
   privateEndpoints: string
 } = toObject(
   map(items(resources.virtualNetwork.subnets), (subnet, index) => {
@@ -355,7 +377,7 @@ resource frontDoor_bootstrap 'Microsoft.Cdn/profiles@2025-06-01' = {
   }
 }
 
-module frontDoor 'br/public:avm/res/cdn/profile:0.19.0' = {
+module frontDoor 'br/public:avm/res/cdn/profile:0.19.1' = {
   params: {
     afdEndpoints: [
       {
@@ -1498,7 +1520,7 @@ module containerEnvironment 'br/public:avm/res/app/managed-environment:0.13.1' =
     zoneRedundant: false
   }
 }
-module containerEnvironment_privateEndpoint 'br/public:avm/res/network/private-endpoint:0.11.0' = {
+module containerEnvironment_privateEndpoint 'br/public:avm/res/network/private-endpoint:0.12.0' = {
   name: '${uniqueString(deployment().name, location)}-managedEnvironments-PrivateEndpoint-0'
   params: {
     enableTelemetry: enableTelemetry
@@ -1581,7 +1603,7 @@ module containerEnvironment_privateEndpoint 'br/public:avm/res/network/private-e
     workloadProfileName: 'Consumption'
   }
 }*/
-module containerRegistry 'br/public:avm/res/container-registry/registry:0.11.0' = {
+module containerRegistry 'br/public:avm/res/container-registry/registry:0.12.0' = {
   params: {
     acrAdminUserEnabled: false
     acrSku: 'Premium'
@@ -1662,9 +1684,43 @@ module containerRegistry 'br/public:avm/res/container-registry/registry:0.11.0' 
         principalType: 'ServicePrincipal'
         roleDefinitionIdOrName: 'Container Registry Repository Reader'
       }
+      {
+        principalId: userAssignedIdentityKubernetesKubelet.outputs.principalId
+        principalType: 'ServicePrincipal'
+        roleDefinitionIdOrName: 'Container Registry Repository Catalog Lister'
+      }
+      {
+        principalId: userAssignedIdentityKubernetesKubelet.outputs.principalId
+        principalType: 'ServicePrincipal'
+        roleDefinitionIdOrName: 'Container Registry Repository Reader'
+      }
     ]
     tags: resources.containerRegistry.?tags
     zoneRedundancy: 'Disabled'
+  }
+}
+module diskEncryptionSet 'br/public:avm/res/compute/disk-encryption-set:0.6.1' = {
+  params: {
+    customerManagedKey: {
+      autoRotationEnabled: true
+      keyName: defaultCustomerManagedKeySettings.keyName
+      keyVaultResourceId: keyVault.outputs.resourceId
+      userAssignedIdentityResourceId: userAssignedIdentityCustomerManagedEncryption.outputs.resourceId
+    }
+    enableKeyPermissions: false
+    enableTelemetry: enableTelemetry
+    encryptionType: 'EncryptionAtRestWithPlatformAndCustomerKeys'
+    location: location
+    lock: {
+      kind: lockKind
+    }
+    managedIdentities: {
+      systemAssigned: false
+      userAssignedResourceIds: [userAssignedIdentityCustomerManagedEncryption.outputs.resourceId]
+    }
+    name: resources.diskEncryptionSet.name
+    roleAssignments: []
+    tags: resources.diskEncryptionSet.?tags
   }
 }
 module functionApplication 'br/public:avm/res/web/site:0.22.0' = {
@@ -2006,9 +2062,119 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.13.3' = {
           }
         ]
       : [])
-    secrets: []
+    secrets: [
+      {
+        name: 'GitHub--Application--PrivateKey'
+        roleAssignments: [
+          {
+            principalId: userAssignedIdentityKubernetesKubelet.outputs.principalId
+            principalType: 'ServicePrincipal'
+            roleDefinitionIdOrName: 'Key Vault Secrets User'
+          }
+        ]
+        value: gitHubApplicationPrivateKey
+      }
+    ]
     softDeleteRetentionInDays: 90
     sku: 'premium'
+  }
+}
+module kubernetesService 'br/public:avm/res/container-service/managed-cluster:0.13.0' = {
+  dependsOn: [containerRegistry]
+  params: {
+    aadProfile: {
+      adminGroupObjectIDs: []
+      enableAzureRBAC: true
+      managed: true
+    }
+    advancedNetworking: {
+      enabled: false
+      observability: {
+        enabled: false
+      }
+      security: {
+        advancedNetworkPolicies: 'None'
+        enabled: false
+      }
+    }
+    apiServerAccessProfile: {
+      authorizedIPRanges: []
+      disableRunCommand: true
+      enablePrivateCluster: true
+      enablePrivateClusterPublicFQDN: false
+      enableVnetIntegration: true
+      privateDNSZone: privateEndpointDnsZones.outputs.dnsZoneMap.containerService
+      subnetId: subnetResourceIdMap.kubernetesServiceApi
+    }
+    autoUpgradeProfile: {
+      nodeOSUpgradeChannel: 'NodeImage'
+      upgradeChannel: 'stable'
+    }
+    azurePolicyEnabled: true
+    diagnosticSettings: []
+    disableLocalAccounts: true
+    diskEncryptionSetResourceId: diskEncryptionSet.outputs.resourceId
+    enableDnsZoneContributorRoleAssignment: false
+    enableKeyvaultSecretsProvider: true
+    enableOidcIssuerProfile: true
+    enableRBAC: true
+    enableSecretRotation: true
+    enableStorageProfileBlobCSIDriver: true
+    enableStorageProfileDiskCSIDriver: true
+    enableStorageProfileFileCSIDriver: true
+    enableStorageProfileSnapshotController: true
+    enableTelemetry: enableTelemetry
+    httpApplicationRoutingEnabled: false
+    identityProfile: {
+      kubeletidentity: {
+        clientId: userAssignedIdentityKubernetesKubelet.outputs.clientId
+        objectId: userAssignedIdentityKubernetesKubelet.outputs.principalId
+        resourceId: userAssignedIdentityKubernetesKubelet.outputs.resourceId
+      }
+    }
+    ingressApplicationGatewayEnabled: false
+    kubeDashboardEnabled: false
+    location: location
+    lock: {
+      kind: lockKind
+    }
+    managedIdentities: {
+      systemAssigned: false
+      userAssignedResourceIds: [userAssignedIdentityKubernetesControlPlane.outputs.resourceId]
+    }
+    monitoringWorkspaceResourceId: logAnalyticsWorkspace.outputs.resourceId
+    name: resources.kubernetesService.name
+    networkDataplane: 'cilium'
+    networkPlugin: 'azure'
+    networkPluginMode: 'overlay'
+    networkPolicy: 'cilium'
+    nodeProvisioningProfile: {
+      defaultNodePools: 'Auto'
+      mode: 'Auto'
+    }
+    //nodeResourceGroup: ''
+    nodeResourceGroupProfile: {
+      restrictionLevel: 'ReadOnly'
+    }
+    omsAgentEnabled: true
+    omsAgentUseAADAuth: true
+    outboundType: 'userAssignedNATGateway'
+    primaryAgentPoolProfiles: [
+      {
+        availabilityZones: []
+        mode: 'System'
+        osDiskType: 'Ephemeral'
+        name: 'system'
+        vmSize: 'Standard_D2ds_v6'
+        vnetSubnetResourceId: subnetResourceIdMap.kubernetesMachinePool
+      }
+    ]
+    publicNetworkAccess: 'Disabled'
+    roleAssignments: []
+    skuName: 'Base'
+    skuTier: 'Free'
+    tags: resources.kubernetesService.?tags
+    webApplicationRoutingEnabled: false
   }
 }
 module logAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.15.0' = {
@@ -2668,6 +2834,32 @@ module userAssignedIdentityFunctionApplication 'br/public:avm/res/managed-identi
     tags: resources.userAssignedIdentityFunctionApplication.?tags
   }
 }
+module userAssignedIdentityKubernetesControlPlane 'br/public:avm/res/managed-identity/user-assigned-identity:0.5.0' = {
+  params: {
+    enableTelemetry: enableTelemetry
+    federatedIdentityCredentials: []
+    location: location
+    lock: {
+      kind: lockKind
+    }
+    name: resources.userAssignedIdentityKubernetesControlPlane.name
+    roleAssignments: []
+    tags: resources.userAssignedIdentityKubernetesControlPlane.?tags
+  }
+}
+module userAssignedIdentityKubernetesKubelet 'br/public:avm/res/managed-identity/user-assigned-identity:0.5.0' = {
+  params: {
+    enableTelemetry: enableTelemetry
+    federatedIdentityCredentials: []
+    location: location
+    lock: {
+      kind: lockKind
+    }
+    name: resources.userAssignedIdentityKubernetesKubelet.name
+    roleAssignments: []
+    tags: resources.userAssignedIdentityKubernetesKubelet.?tags
+  }
+}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // Access Management
@@ -2677,6 +2869,9 @@ module accessManagement './accessManagement.bicep' = {
     applicationInsights
     applicationServicePlan
     configurationStore
+    containerApplication
+    containerEnvironment
+    containerRegistry
     devCenter
     devCenter_project
     devOpsAgentPool
@@ -2686,6 +2881,7 @@ module accessManagement './accessManagement.bicep' = {
     frontDoor_waf_rateLimit
     functionApplication
     keyVault
+    kubernetesService
     logAnalyticsWorkspace
     monitorPrivateLinkScope
     natGateway

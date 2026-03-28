@@ -4,6 +4,7 @@ type dnsZoneMapType = {
   configurationStore: string
   containerEnvironment: string
   containerRegistry: string
+  containerService: string
   keyVault: string
   monitor: {
     agentService: string
@@ -32,6 +33,7 @@ var dnsZoneMap dnsZoneMapType = {
   configurationStore: 'privatelink.azconfig.io'
   containerEnvironment: 'privatelink.{0}.azurecontainerapps.io'
   containerRegistry: 'privatelink.azurecr.io'
+  containerService: 'privatelink.{0}.azmk8s.io'
   keyVault: 'privatelink.vaultcore.azure.net'
   monitor: {
     agentService: 'privatelink.agentsvc.azure-automation.net'
@@ -161,6 +163,28 @@ resource containerRegistry_virtualNetworkLinks 'Microsoft.Network/privateDnsZone
       resolutionPolicy: 'Default'
       virtualNetwork: {
         id: id
+      }
+    }
+  }
+]
+@onlyIfNotExists()
+resource containerService_virtualNetworkLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = [
+  for entry in flatten(map(
+    virtualNetworkResourceIds,
+    id =>
+      map(locations, location => {
+        id: id
+        index: first(filter(dnsZones, zone => (format(dnsZoneMap.containerService, location) == zone.value)))!.index
+      })
+  )): {
+    location: 'global'
+    name: '${last(split(entry.id, '/'))}-${uniqueString(privateDnsZones[entry.index].id, entry.id)}'
+    parent: privateDnsZones[entry.index]
+    properties: {
+      registrationEnabled: false
+      resolutionPolicy: 'Default'
+      virtualNetwork: {
+        id: entry.id
       }
     }
   }
